@@ -580,5 +580,15 @@ sub load_database() {
 
 	return(@db);
 }
+
+sub age_database() {
+	my($self) = shift;
+	my($db) = shift;
 	
+	my($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,
+                   $atime,$mtime,$ctime,$blksize,$blocks)
+                       = stat($db);
+
+	return($mtime);
+}
 1;
