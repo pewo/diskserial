@@ -8,7 +8,12 @@ use FindBin;
 use lib $FindBin::Bin;
 use DiskSerial;
 
-my($usage) = "$0 \n\t--newdb ( create new database ) \n\t--olddb ( create old database ) \n\t--check|--compare ( compares old and new databases ) \n\t--op5|--nagios (report like a nagios check)\n";
+my($usage) = "$0\n";
+$usage .= "\t--newdb ( create new database ) \n";
+$usage .= "\t--olddb ( create old database ) \n";
+$usage .= "\t--check|--compare ( compares old and new databases ) \n";
+$usage .= "\t--op5|--nagios (report like a nagios check)\n";
+
 my($create_olddb) = undef;
 my($create_newdb) = undef;
 my($compare) = undef;
