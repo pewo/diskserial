@@ -15,6 +15,8 @@ my($nagios) = undef;
 my($sha256) = undef;
 my($help) = undef;
 my($perf) = undef;
+my($dumpcsv) = undef;
+my($ofs) = ";";
 
 my($sha256sum) = "/usr/bin/sha256sum";
 #$sha256sum = "sha256sum" unless ( -x $sha256sum );
@@ -29,6 +31,7 @@ Usage: $0
    --op5|--nagios (report like a nagios check)
    --perf ( include nagios performance output, age, removed and new disks )
    --sha256 | --sha256=<sha256sum> (Report or verify database checksum using sha256sum)
+   --dumpcsv ( create a csv report of the new database )
    --help  (This help)
 
 Ways of working
@@ -42,6 +45,9 @@ Step2: Retrieve the checksum of the database.
 
 Step3: Create a new database and verify against base database.
 # $0 --initnew --check --sha256=<the output from Step2>
+
+Step4: Create a csv report and start counting.
+# $0 --dumpcsv
 
 );
 
@@ -59,10 +65,9 @@ sub doexitcrit($) {
 	}
 }
 
-sub checksummer($$;$) {
+sub checksummer($$) {
 	my($checksummer) = shift;
 	my($filename) = shift;
-	my($checksum) = shift;
 
 	unless ( -x $checksummer ) {
 		doexitcrit("$checksummer does not exists or is not an executable");
@@ -80,15 +85,7 @@ sub checksummer($$;$) {
 	unless ( $cksum ) {
 		doexitcrit("Unable to get checksum using $checksummer on $filename");
 	}
-	if ( length($checksum) ) {
-		if ( $checksum ne $cksum ) {
-			doexitcrit("Incorrect checksum on $filename");
-		}
-	}
-	else {
-		print "$cksum\n";
-		exit(0);
-	}
+	return($cksum);
 }
 	
 
@@ -107,6 +104,7 @@ GetOptions (
 	"perf" => \$perf,
 	"sha256|sha256sum:s" => \$sha256,
 	"help" => \$help,
+	"dumpcsv" => \$dumpcsv,
 )  or die("Error in command line arguments\n" . usage() . "\n");
 
 if ( $help ) {
@@ -138,8 +136,18 @@ if ( defined($sha256) ) {
 #
 # Execute checksum check or create
 #
+my($cksum);
 if ( $checksummer ) {	
-	checksummer($checksummer,$initdb,$checksum);
+	$cksum = checksummer($checksummer,$initdb);
+	if ( length($checksum) ) {
+		if ( $checksum ne $cksum ) {
+			doexitcrit("Incorrect checksum on $initdb");
+		}
+	}
+	else {
+		print "$cksum\n";
+		exit(0);
+	}
 }
 
 unless ( $compare ) {
@@ -161,9 +169,6 @@ my($agediff) = 0;
 if ( $age_newdb && $age_initdb ) {
 	$agediff = $age_newdb - $age_initdb;
 	$agediff = int($agediff/(24*3600));
-	#print "initdb= " . localtime($age_initdb) . "\n";
-	#print "newdb=  " . localtime($age_newdb) . "\n";
-	#print "agediff=$agediff\n";
 }
 
 
@@ -233,6 +238,31 @@ if ( $nagios ) {
 		print "OK: No changes of disk serial numbers\n";
 	}
 	exit($error);
+}
+elsif ( $dumpcsv ) {
+	print join($ofs,"","Date","today",scalar localtime(time)) . "\n";
+	print join($ofs,"","Filedate",$initdb,scalar localtime($age_initdb)) . "\n";
+	if ( $checksummer ) {	
+		print join($ofs,"","Checksum",$initdb,$cksum) . "\n";
+	}
+	print join($ofs,"","Filedate",$newdb,scalar localtime($age_newdb)) . "\n";
+	print join($ofs,"Date","Found","Serial","Info") . "\n";
+	foreach ( @initdb ) {
+		my($tag);
+		my($serial) = "";
+		if ( m/(serial=\w+)/ ) {
+			($tag,$serial) = split(/=/,$1);
+			s/serial=\w+//;
+			s/,+/,/g;
+			s/,$//;
+		}
+			
+		print join($ofs,"","",$serial,$_) . "\n";
+	}
+	print "Changes from initdb\n";
+	foreach ( @report ) {
+		print join($ofs,"","","",$_) . "\n";
+	}
 }
 else {
 	foreach ( @report ) {

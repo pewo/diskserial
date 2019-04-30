@@ -1,3 +1,51 @@
+package Object;
+
+
+use strict;
+use Carp;
+use vars qw($VERSION);
+
+$VERSION = '0.01';
+
+sub set($$$) {
+        my($self) = shift;
+        my($what) = shift;
+        my($value) = shift;
+
+        $what =~ tr/a-z/A-Z/;
+
+        $self->{ $what }=$value;
+        return($value);
+}
+
+sub get($$) {
+        my($self) = shift;
+        my($what) = shift;
+
+        $what =~ tr/a-z/A-Z/;
+        my $value = $self->{ $what };
+
+        return($self->{ $what });
+}
+
+sub new {
+        my $proto  = shift;
+        my $class  = ref($proto) || $proto;
+        my $self   = {};
+
+        bless($self,$class);
+
+        my(%args) = @_;
+
+        my($key,$value);
+        while( ($key, $value) = each %args ) {
+                $key =~ tr/a-z/A-Z/;
+                $self->set($key,$value);
+        }
+
+        return($self);
+}
+
 package DiskSerial;
 
 use strict;
@@ -5,9 +53,9 @@ use Carp;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
-use lib ".";
+#use lib ".";
 #use HashTools;
-use Object;
+#use Object;
 
 my($debug) = 1;
 $DiskSerial::VERSION = '0.01';
@@ -481,11 +529,13 @@ sub generate_database() {
 		delete($disk_inv{$target}{decoder});
 		my($source) = $disk_inv{$target}{source} || "unknown";
 		delete($disk_inv{$target}{source});
-		my($server) = "Target: $target, decoder: $decoder, source: $source";
+		#my($server) = "Target: $target, decoder: $decoder, source: $source";
 		my($hp) = $disk_inv{$target};
 		my($i);
 		push(@db,"#");
-		push(@db,"# $server");
+		push(@db,"# target: $target");
+		push(@db,"# decoder: $decoder");
+		push(@db,"# source: $source");
 		push(@db,"#");
 		foreach $i ( sort { $a <=> $b } keys %$hp ) {
 			my($disk) = "target=$target ";
@@ -502,7 +552,7 @@ sub generate_database() {
 	#
 	foreach $target ( sort @inv ) {
 		#next unless ( $target =~ /oob/ );
-		my($server) = "Target: $target";
+		#my($server) = "Target: $target";
 		my(%target) = $self->inventory($target);
 		my($type) = $target{type} || "unknown";
 		next if ( $type =~ /virtual/i );
@@ -510,7 +560,10 @@ sub generate_database() {
 			$server .= ", $_: $target{$_} ";
 		}
 		push(@db,"#");
-		push(@db,"# $server");
+		push(@db,"# target: $target");
+		foreach( sort keys %target ) {
+			push(@db,"# $_: $target{$_}");
+		}
 		push(@db,"#");
 		my(%disks) = $self->getserial($target);
 		my($i);
