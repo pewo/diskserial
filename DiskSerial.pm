@@ -137,10 +137,14 @@ sub inventory() {
 	#
 	$type = "Physical Server";
 	my(@eeprom) = $self->readfile("$dir/eeprom");
+	my(@lspci) = $self->readfile("$dir/lspci");
 	if ( grep(/virtual-console/i,@eeprom) ) {
 		$type = "Virtual Server";
 	}
 	elsif ( grep(/virtual/i,@uname) ) {
+		$type = "Virtual Server";
+	}
+	elsif ( grep(/vmware/i,@lspci) ) {
 		$type = "Virtual Server";
 	}
 	elsif ( $model ) {
@@ -500,6 +504,8 @@ sub generate_database() {
 		#next unless ( $target =~ /oob/ );
 		my($server) = "Target: $target";
 		my(%target) = $self->inventory($target);
+		my($type) = $target{type} || "unknown";
+		next if ( $type =~ /virtual/i );
 		foreach ( sort keys %target ) {
 			$server .= ", $_: $target{$_} ";
 		}
