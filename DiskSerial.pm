@@ -229,8 +229,9 @@ sub smartctl_info() {
 			$tmp{$i}{product}=$1;
 			print "Adding $1 to product\n" if ( $debug > 8 );
 		}
-		elsif ( m/^Serial.*:\s+(\w+)/i ) {
+		elsif ( m/^Serial.*:\s+(\w+.*)/i ) {
 			$tmp{$i}{serial}=$1;
+			$tmp{$i}{serial} =~ s/\W//g:
 			print "Adding $1 to serial\n" if ( $debug > 8 );
 		}
 		elsif ( m/^Device\s+Model.*:\s+(\w+)/i ) {
