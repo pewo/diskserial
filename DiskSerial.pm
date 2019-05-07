@@ -67,17 +67,18 @@ sub new {
         my $self  = {};
         bless($self,$class);
 
-	my($dir) = "/local/robot/curr";
+	my($dir) = "/local/robot/curr:/local/robot/static";
 
         my(%hash) = ( dir => $dir, @_ );
         while ( my($key,$val) = each(%hash) ) {
                 $self->set($key,$val);
         }
 
-	$dir = $self->get("dir");
-	if ( ! -d $dir ) {
-		chdir($dir);
-		croak "$dir: $!";
+	foreach $dir ( split(/:/,$self->get("dir")) ) {
+		if ( ! -d $dir ) {
+			chdir($dir);
+			croak "$dir: $!";
+		}
 	}
         return($self);
 }
@@ -108,19 +109,27 @@ sub readfile() {
 sub _getdir() {
 	my($self) = shift;
 	my($target) = shift;
-	my($odir) = $self->get("dir");
 
-	my($dir) = $odir . "/$target";
-	unless ( -d $dir ) {
-		my(@dirs) = ( <$odir/$target*> );
-		my($tdir) = shift(@dirs);
-		if ( defined($tdir ) ) {
+	my($dir) = undef;
+	my($odir);
+	foreach $odir ( split(/:/,$self->get("dir")) ) {
+		my($tdir) = $odir . "/$target";
+		if ( -d $tdir ) {
 			$dir = $tdir;
 		}
+		else {
+			my(@dirs) = ( <$odir/$target*> );
+			($tdir) = shift(@dirs);
+			if ( defined($tdir ) ) {
+				$dir = $tdir;
+			}
+		}
 	}
-	if ( -d $dir ) {
-		print "Returning [$dir] for [$target]\n" if ( $debug > 8);
-		return($dir);
+	if ( $dir ) {
+		if ( -d $dir ) {
+			print "Returning [$dir] for [$target]\n" if ( $debug > 8);
+			return($dir);
+		}
 	}
 	else{
 		return(undef);
@@ -130,23 +139,34 @@ sub _getdir() {
 sub inventory() {
 	my($self) = shift;
 	my($target) = shift;
-	my($odir) = $self->get("dir");
 	#
 	# Without target, return the list of targets existing in directory
 	#
 	unless ( $target ) {
 		my(@inv) = ();
-		foreach ( <$odir/*> )  {
-			push(@inv,basename($_));
+		my($odir);
+		foreach $odir ( split(/:/,$self->get("dir")) ) {
+			foreach ( <$odir/*> )  {
+				push(@inv,basename($_));
+			}
 		}
+		#print "DEBUG " . Dumper(\@inv)  . "\n";
 		return(@inv);
 	}
-	my($dir) = $odir . "/$target";
-	unless ( -d $dir ) {
-		my(@dirs) = ( <$odir/$target*> );
-		my($tdir) = shift(@dirs);
-		if ( defined($tdir ) ) {
+
+	my($dir) = undef;
+	my($odir);
+	foreach $odir ( split(/:/,$self->get("dir") ) ) {
+		my($tdir) = $odir . "/$target";
+		if ( -d $tdir ) {
 			$dir = $tdir;
+		}
+		else {
+			my(@dirs) = ( <$tdir/$target*> );
+			($tdir) = shift(@dirs);
+			if ( defined($tdir) ) {
+				$dir = $tdir;
+			}
 		}
 	}
 	unless ( -d $dir ) {
@@ -183,28 +203,40 @@ sub inventory() {
 	#
 	# Type
 	#
+
+	
 	$type = "Physical Server";
-	my(@eeprom) = $self->readfile("$dir/eeprom");
+	my($rule) = "static";
 	my(@lspci) = $self->readfile("$dir/lspci");
-	if ( grep(/virtual-console/i,@eeprom) ) {
+	my(@eeprom) = $self->readfile("$dir/eeprom");
+	my(@type) = $self->readfile("$dir/type");
+
+	if ( grep(/virtual/i,@type ) ) {
 		$type = "Virtual Server";
+		$rule = "type";
 	}
+	#elsif ( grep(/virtual-console/i,@eeprom) ) {
+	#	$type = "Virtual Server";
+	#	$rule = "eeprom";
+	#}
 	elsif ( grep(/virtual/i,@uname) ) {
 		$type = "Virtual Server";
-	}
-	elsif ( grep(/vmware/i,@lspci) ) {
-		$type = "Virtual Server";
+		$rule = "uname";
 	}
 	elsif ( $model ) {
 		if ( $model =~ /vmware/i ) {
 			$type = "Virtual Server";
+			$rule = "model";
 		}
 	}
+	if ( grep(/vmware/i,@lspci) ) {
+		$type = "Virtual Server";
+		$rule = "lspci";
+	}
 		
-
-	
 	$inv{manu}=$self->trim($manu) if ( $manu );
 	$inv{type}=$self->trim($type) if ( $type );
+	$inv{rule}=$self->trim($rule) if ( $rule );
 	$inv{model}=$self->trim($model) if ( $model );
 
 	return(%inv);
@@ -230,9 +262,10 @@ sub smartctl_info() {
 			print "Adding $1 to product\n" if ( $debug > 8 );
 		}
 		elsif ( m/^Serial.*:\s+(\w+.*)/i ) {
-			$tmp{$i}{serial}=$1;
-			$tmp{$i}{serial} =~ s/\W//g:
-			print "Adding $1 to serial\n" if ( $debug > 8 );
+			my($serial) = $1;
+			$serial =~ s/\W//g;
+			$tmp{$i}{serial}=$serial;
+			print "Adding $serial to serial\n" if ( $debug > 8 );
 		}
 		elsif ( m/^Device\s+Model.*:\s+(\w+)/i ) {
 			$tmp{$i}{model}=$1;
@@ -298,24 +331,78 @@ sub iostat_E() {
 	return(%disks);
 }
 
+sub count_serials() {
+	my($self) = shift;
+	my(%hash) = @_;
+
+	my($serials) = 0;
+	foreach ( keys %hash ) {
+		my($hp) = $hash{$_};
+		foreach ( keys %$hp ) {
+			#print "DEBUG count_serial, key=[$_], serials=[$serials]\n";
+			next unless ( $_ =~ /serial/i );
+			next unless ( length($hp->{$_}) );
+			next if ( $hp->{$_} =~ /unknown/ );
+			$serials++;
+		}
+	}
+	return($serials);
+}
+
+sub getage() {
+	my($self) = shift;
+	my($file) = shift;
+	return int( (100 * -M $file)) / 100;
+}
+
 sub getserial() {
 	my($self) = shift;
 	my($target) = shift;
 	my($dir) = $self->_getdir($target);
+	my(%info) = ( "source" => "unknown", "age" => "unknown");
+	#return unless ( $target =~ /ezri/ );
+	#print "DEBUG getserial dir=[$dir]\n";
 
 	my(%disks) = ();
 	my($iostat_E) = $dir . "/iostat_E";
 	if ( -r $iostat_E ) {
+		my($age) = $self->getage($iostat_E);
+		$info{age}=$age;
+		$info{source}=$iostat_E;
 		my(%iostat_E) = $self->iostat_E($iostat_E);
-		return(%iostat_E);
+		my($serials) = 0;
+		$serials = $self->count_serials(%iostat_E);
+		#print "DEBUG iostat_E serials: $serials\n";
+		if ( $serials ) {
+			#print Dumper(\%iostat_E);
+			return(\%info, %iostat_E);
+		}
 	}
+	my($prtconf) = $dir . "/prtconf";
+	if ( -r $prtconf ) {
+		my($age) = $self->getage($prtconf);
+		$info{age}=$age;
+		$info{source}=$prtconf;
+		my(%prtconf) = $self->inv_prtconf($prtconf);
+		#print "DEBUG jaffa prtconf: " . Dumper(\%prtconf);
+		my($serials) = 0;
+		$serials = $self->count_serials(%prtconf);
+		if ( $serials ) {
+			#print Dumper(\%prtconf);
+			return(\%info, %prtconf);
+		}
+	}
+		
 	my($smartctl_info) = $dir . "/smartctl_info";
 	if ( -r $smartctl_info ) {
+		my($age) = $self->getage($smartctl_info);
+		$info{age}=$age;
+		$info{source}=$smartctl_info;
 		my(%smartctl_info) = $self->smartctl_info($smartctl_info);
-		return(%smartctl_info);
+		return(\%info, %smartctl_info);
 	}
 
-	return(%disks);
+	return(\%info, %disks);
 }
 
 sub disk_inv_racadm() {
@@ -377,8 +464,8 @@ sub disk_inv_racadm() {
 		elsif ( m/^productid\s+=\s+(.*)/i ) {
 			$tmp{$i}{productid}=$1;
 		}
-		elsif ( m/^serialnumber\s+=\s+(.*)/i ) {
-			$tmp{$i}{serialnumber}=$1;
+		elsif ( m/^serial.*\s+=\s+(.*)/i ) {
+			$tmp{$i}{serial}=$1;
 		}
 		elsif ( m/^partnumber\s+=\s+(.*)/i ) {
 			$tmp{$i}{partnumber}=$1;
@@ -390,12 +477,80 @@ sub disk_inv_racadm() {
 		$disks{$_}{name} = $tmp{$_}{name} || "unknown";
 		$disks{$_}{manufacturer} = $tmp{$_}{manufacturer} || "unknown";
 		$disks{$_}{productid} = $tmp{$_}{productid} || "unknown";
-		$disks{$_}{serialnumber} = $tmp{$_}{serialnumber} || "unknown";
+		$disks{$_}{serial} = $tmp{$_}{serial} || "unknown";
 		$disks{$_}{partnumber} = $tmp{$_}{partnumber} || "unknown";
 	}
 	return(%disks);
 }
 
+
+sub inv_prtconf() {
+	my($self) = shift;
+	my($prtconf) = shift;
+
+	my(@prtconf) = $self->readfile($prtconf);
+	my($indisk) = 0;
+	my($line) = 0;
+	my(%names);
+	my($name) = "";
+	my($value) = "";
+	my($i) = 0;
+	foreach ( @prtconf ) {
+		$line++;
+		s/^\s+//;
+		if ( m/^disk.*instance/i ) {
+			$indisk++;
+			next;
+		}
+		if ( m/^\w+,\s+instance/i ) {
+			$indisk=0;
+			next;
+		}
+	
+		next unless ( $indisk );
+		chomp;
+		$i++ if ( m/inquiry-serial-no/ );
+	
+		if ( m/^name/ ) {
+			$name = $_;
+			#print "$line\t$indisk\t$name";
+		}
+		if ( m/^value/ ) {
+			s/value=//;
+			s/\'//g;
+			$value = $_;
+			#print "$line\t$indisk\t$value";
+			$names{$i}{$name}=$value;
+		}
+	
+	}
+
+	my(%keys) = (
+		"client-guid"		=> "guid",
+		"inquiry-product-id"	=> "product",
+		"inquiry-serial-no"	=> "serial",
+		"inquiry-vendor-id"	=> "vendor",
+	);
+
+
+	my(%disks);
+	foreach $i ( sort keys %names ) {
+		my($hp) = $names{$i};
+		foreach ( sort keys %$hp ) {
+			my($key);
+			foreach  $key ( sort keys %keys ) {
+				if ( $_ =~ /name.*$key/ ) {
+					$disks{$i}{$keys{$key}}=$hp->{$_};
+				}
+			}
+		}
+	}
+
+	#print Dumper(\%disks);
+	return(%disks);
+}
+	
+	
 sub expand_netapp_disk() {
 	my($self) = shift;
 	my($disk) = shift;
@@ -423,6 +578,7 @@ sub disk_inv_7mode() {
 		next unless ( $disk =~ /^\d/ );
 		next unless ( defined($serial) );
 		next unless ( $serial =~ /\w+/ );
+		$serial =~ s/\W//g;
 		my($newdisk) = 	$self->expand_netapp_disk($disk);
 		$tmp{$newdisk}=$serial;
 	}
@@ -472,44 +628,60 @@ sub disk_inv_cdot() {
 sub disk_inv() {
 	my($self) = shift;
 	
-	my($dir) = $self->get("dir");
-	my($diskinv);
+	my($dir);
+
 	my(%targets);
-	foreach $diskinv ( <$dir/*/disk.*.inv.*> ) {
-		next unless ( $diskinv =~ /cdot/ );
-		my($basename) = basename($diskinv);
-		next unless ( $basename );
-		my($target) = undef;
-		if ( $basename =~ /^disk\.(.*)\.inv\./ ) {
-			$target = $1;
-		}
-		unless ( $target ) {
-			die "Can't get target from string $basename, exiting...\n";
-		}
-		#print "basename: $basename, target: $target\n";
-		$targets{$target}{source}=$diskinv;
-		if ( $diskinv =~ /\.racadm$/ ) {
-			$targets{$target}{decoder}="racadm";
-			my(%tmp) = $self->disk_inv_racadm($diskinv);
-			foreach ( sort keys %tmp ) {
-				$targets{$target}{$_}=$tmp{$_};
+	foreach $dir ( split(/:/,$self->get("dir")) ) {
+		#print "DEBUG disk_inv dir=$dir\n";
+		#my($dir) = $self->get("dir");
+		my($diskinv);
+		foreach $diskinv ( <$dir/*/disk.*.inv.*> ) {
+			#print "DEBUG disk_inv $dir $diskinv\n";
+			#next unless ( $diskinv =~ /cdot/ );
+			my($basename) = basename($diskinv);
+			next unless ( $basename );
+			my($target) = undef;
+			if ( $basename =~ /^disk\.(.*)\.inv\./ ) {
+				$target = $1;
 			}
-		}
-		elsif ( $diskinv =~ /\.7mode$/ ) {
-			$targets{$target}{decoder}="7mode";
-			my(%tmp) = $self->disk_inv_7mode($diskinv);
-			foreach ( sort keys %tmp ) {
-				$targets{$target}{$_}=$tmp{$_};
+			unless ( $target ) {
+				die "Can't get target from string $basename, exiting...\n";
 			}
-		}
-		elsif ( $diskinv =~ /\.cdot$/ ) {
-			$targets{$target}{decoder}="cdot";
-			my(%tmp) = $self->disk_inv_cdot($diskinv);
-			foreach ( sort keys %tmp ) {
-				$targets{$target}{$_}=$tmp{$_};
+			#print "basename: $basename, target: $target\n";
+			$targets{$target}{source}=$diskinv;
+			$targets{$target}{age}=$self->getage($diskinv);
+			if ( $diskinv =~ /\.racadm$/ ) {
+				$targets{$target}{decoder}="racadm";
+				my(%tmp) = $self->disk_inv_racadm($diskinv);
+				foreach ( sort keys %tmp ) {
+					$targets{$target}{$_}=$tmp{$_};
+				}
 			}
+			elsif ( $diskinv =~ /\.7mode$/ ) {
+				$targets{$target}{decoder}="7mode";
+				my(%tmp) = $self->disk_inv_7mode($diskinv);
+				foreach ( sort keys %tmp ) {
+					$targets{$target}{$_}=$tmp{$_};
+				}
+			}
+			elsif ( $diskinv =~ /\.cdot$/ ) {
+				$targets{$target}{decoder}="cdot";
+				my(%tmp) = $self->disk_inv_cdot($diskinv);
+				foreach ( sort keys %tmp ) {
+					$targets{$target}{$_}=$tmp{$_};
+				}
+			}
+			elsif ( $diskinv =~ /\.smartctl$/ ) {
+				$targets{$target}{decoder}="smartctl";
+				my(%tmp) = $self->smartctl_info($diskinv);
+				foreach ( sort keys %tmp ) {
+					$targets{$target}{$_}=$tmp{$_};
+				}
+			}
+				
 		}
 	}
+	#print "DEBUG " . Dumper(\%targets);
 	return(%targets);
 }
 
@@ -518,18 +690,22 @@ sub generate_database() {
 	my($self) = shift;
 	
 	my(@inv) = $self->inventory();
-	my(@db) = ();
+	#my(@db) = ();
 
+	my(%db);
 	#
 	# Get all remote collected disk inventory
 	#
 	my(%disk_inv) = $self->disk_inv();
 	my($target);
 	foreach $target ( sort keys %disk_inv ) {
+		my(@db) = ();
 		my($decoder) = $disk_inv{$target}{decoder} || "unknown";
 		delete($disk_inv{$target}{decoder});
 		my($source) = $disk_inv{$target}{source} || "unknown";
 		delete($disk_inv{$target}{source});
+		my($age) = $disk_inv{$target}{age} || "unknown";
+		delete($disk_inv{$target}{age});
 		#my($server) = "Target: $target, decoder: $decoder, source: $source";
 		my($hp) = $disk_inv{$target};
 		my($i);
@@ -537,7 +713,10 @@ sub generate_database() {
 		push(@db,"# target: $target");
 		push(@db,"# decoder: $decoder");
 		push(@db,"# source: $source");
+		push(@db,"# age: $age");
 		push(@db,"#");
+		my($disks) = 0;
+		my($serials) = 0;
 		foreach $i ( sort { $a <=> $b } keys %$hp ) {
 			my($disk) = "target=$target ";
 			my($diskhp) = $hp->{$i};
@@ -545,28 +724,38 @@ sub generate_database() {
 				$disk .= "$_=$diskhp->{$_} ";
 			}
 			push(@db,$disk);
+			$disks++;
+			next if ( $disk =~ /serial=unknown/ );
+			$serials++ 
 		}
+		push(@db,"# $target: disks: $disks, serial: $serials");
+		$db{$target}=\@db;
 	}
 
 	#
 	# Get all local disk inventory
 	#
 	foreach $target ( sort @inv ) {
-		#next unless ( $target =~ /oob/ );
+		my(@db) = ();
+		#next unless ( $target =~ /canis/ );
 		#my($server) = "Target: $target";
+		#print "DEBUG target=[$target]\n";
 		my(%target) = $self->inventory($target);
 		my($type) = $target{type} || "unknown";
+		my($rule) = $target{rule} || "unknown";
 		next if ( $type =~ /virtual/i );
-		foreach ( sort keys %target ) {
-			$server .= ", $_: $target{$_} ";
-		}
+		print "target: $target, type: $type, rule: $rule\n";
 		push(@db,"#");
 		push(@db,"# target: $target");
 		foreach( sort keys %target ) {
 			push(@db,"# $_: $target{$_}");
 		}
+		my($info, %disks) = $self->getserial($target);
+		if ( $info ) {
+			push(@db,"# source: " . $info->{"source"});
+			push(@db,"# age: " . $info->{"age"});
+		}
 		push(@db,"#");
-		my(%disks) = $self->getserial($target);
 		my($i);
 
 		#
@@ -587,6 +776,8 @@ sub generate_database() {
 		#
 		# Use tha max length for each value
 		#
+		my($disks) = 0;
+		my($serials) = 0;
 		foreach $i ( sort keys %disks ) {
 			my($disk) = "target=$target ";
 			my($hp) = $disks{$i};
@@ -596,6 +787,18 @@ sub generate_database() {
 				$disk .= sprintf("%s=%-*.*s ",$_, $max{$_}{val}, $max{$_}{val}, $hp->{$_});
 			}
 			push(@db,$disk);
+			$disks++;
+			next if ( $disk =~ /serial=unknown/ );
+			$serials++;
+		}
+		push(@db,"# $target: disks: $disks, serial: $serials");
+		$db{$target}=\@db;
+	}
+	my(@db);
+	foreach ( sort keys %db ) {
+		my($ap) = $db{$_};
+		foreach ( @$ap ) {
+			push(@db,$_);
 		}
 	}
 	return(@db);
@@ -604,21 +807,30 @@ sub generate_database() {
 sub save_database() {
 	my($self) = shift;
 	my($db) = shift;
+	my($verbose) = $db . ".verbose";
 	
 	my($old) = $db . ".old";
+	my($oldverbose) = $verbose . ".old";
+
 	my(@db) = $self->generate_database();
 	
 	unlink($old);
+	unlink($oldverbose);
 	move($db,$old);
-	unlink($old);
+	move($verbose,$oldverbose);
 	
 	unless ( open(DB,">$db") ) {
 		die "Writing to $db: $!\n";
 	}
+	unless ( open(VERBOSE,">$verbose") ) {
+		die "Writing to $verbose $!\n";
+	}
 	foreach ( @db ) {
-		print DB $_ . "\n";
+		print VERBOSE $_ . "\n";
+		print DB $_ . "\n" unless ( m/^#/ );
 	}
 	close(DB);
+	close(VERBOSE);
 
 	return(@db);
 }
