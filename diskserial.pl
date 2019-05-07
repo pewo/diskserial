@@ -202,7 +202,9 @@ foreach ( sort keys %initdb ) {
 my($new_disks) = 0;
 my($new_disks_text) = undef;
 push(@report,"\nNew disks:");
+my($disks) = 0;
 foreach ( sort keys %newdb ) {
+	$disks++;
 	next if ( $initdb{$_} );
 	push(@report,$_);
 	$new_disks_text .= $_ . " ";
@@ -225,17 +227,19 @@ if ( $nagios ) {
 	
 	$res =~ s/,\s*$//;
 	$res =~ s/,/, /;
+	my($perfstr) = "";
 	if ( $perf ) {
-		$res .= "| agediff=$agediff removed=$removed_disks new=$new_disks";
+		$perfstr .= "| agediff=$agediff disks=$disks removed=$removed_disks new=$new_disks";
 	}
+
 	if ( $error > 1 ) {
-		print "CRITICAL:" . $res . "\n";
+		print "CRITICAL:" . $res . $perfstr . "\n";
 	}
 	elsif ( $error > 0 ) {
-		print "WARNING:" . $res . "\n";
+		print "WARNING:" . $res . $perfstr . "\n";
 	}
 	else {
-		print "OK: No changes of disk serial numbers\n";
+		print "OK: No changes of disk serial numbers" . $perfstr . "\n";
 	}
 	exit($error);
 }
